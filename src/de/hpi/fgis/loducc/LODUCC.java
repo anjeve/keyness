@@ -296,11 +296,6 @@ public class LODUCC {
 			subjects.add(subjectUri);
 			*/
 			entityCountThing++;
-			/*
-			if (entityCountThing%200000 == 0) {
-				logger.info(entityCountThing);
-			}
-			*/
 		}
 		qe_s.close();
 		logger.info("Found "+entityCountThing+" entities of type owl:Thing");
