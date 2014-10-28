@@ -291,6 +291,7 @@ public class LODUCC {
 			RDFNode subject = sol.get("s");
 			String subjectUri = subject.toString();
 			if (!subjectUri.startsWith(ns)) continue;
+			if (subjectUri.startsWith(ontns)) continue;
 			/*
 			if (subjects.contains(subjectUri)) continue;
 			subjects.add(subjectUri);
