@@ -338,15 +338,13 @@ public class LODUCC {
 
 	private void calculateUniquenessPerProperty(int entityCountThing,
 			RDFNode property) {
-		//int entitiesWithProperty = 0;
 		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
-
-		Property currentProperty = ResourceFactory.createProperty(property.toString());
+		
+		Property currentProperty = property.as(Property.class);
 		ResIterator subjects = dataset.listResourcesWithProperty(currentProperty);
 		while (subjects.hasNext()) {
 			Resource subject = (Resource) subjects.next();
 			if (!subject.toString().startsWith(ns)) continue;
-			//entitiesWithProperty++;
 			
 			StmtIterator statements = subject.listProperties(currentProperty);
 			while (statements.hasNext()) {
@@ -375,9 +373,7 @@ public class LODUCC {
 					predicates.put(property.toString(), objects);
 					entities.put(subject.toString(), predicates);
 				}
-				
 			}
-
 		}
 		
 		calculateUniquenessInternal(null, entityCountThing, entityCountThing, entities);
