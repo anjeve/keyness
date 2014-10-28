@@ -104,14 +104,14 @@ public class LODUCC {
 						throw new WrongNumberArgsException("Please provide only one TDB folder. ("+files[i]+")");
 					}
 					*/
-					logger.warn("trying to load '" + files[i] + "'");
 					String tbdDirectory = files[i];
+		            logger.info("Loaded " + files[i]);
 					Dataset ds = TDBFactory.createDataset(tbdDirectory) ;
 					this.dataset = ds.getDefaultModel() ;
 					loadedDatasets++;
 				} else if (this.jena) {
 					loadDump(files[i]);
-		            logger.warn("Loaded " + files[i]);
+		            logger.info("Loaded " + files[i]);
 					loadedDatasets++;
 				}
 			}
@@ -475,7 +475,7 @@ public class LODUCC {
 		//get entity count for owl:Thing
 		int entityCountThing = 0;
 		if (this.all) {
-            logger.warn("Starting entity count.");
+            logger.info("Starting entity count.");
 			String entityCountAllSparql = "SELECT DISTINCT ?s WHERE { "
 					+ " ?s a ?t. } ";
 
@@ -502,7 +502,7 @@ public class LODUCC {
 			}
 			*/
 			qeAll.close();
-            logger.warn("Found " + entityCountThing + " entities of type owl:Thing");
+            logger.info("Found " + entityCountThing + " entities of type owl:Thing");
 		}
 		
 		// get Uniqueness
@@ -571,7 +571,7 @@ public class LODUCC {
 			}
 		}
 		qe.close();
-		logger.warn("Done building property map");
+		logger.info("Done building property map");
 
 		calculateUniquenessInternal(ontologyClass, entityCount, entityCountThing, entities);
 	}
@@ -669,7 +669,7 @@ public class LODUCC {
 		}
 	}
 	
-	public HashMap<String, String> readCsv(String csvFileToRead) {
+	private HashMap<String, String> readCsv(String csvFileToRead) {
 		HashMap<String, String> csv = new HashMap<String, String>();
 		BufferedReader br = null;
 		String line = "";
