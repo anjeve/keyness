@@ -36,6 +36,7 @@ import com.hp.hpl.jena.rdf.model.Resource;
 import com.hp.hpl.jena.rdf.model.ResourceFactory;
 import com.hp.hpl.jena.rdf.model.Statement;
 import com.hp.hpl.jena.rdf.model.StmtIterator;
+import com.hp.hpl.jena.sdb.assembler.MissingException;
 import com.hp.hpl.jena.tdb.TDBFactory;
 import com.hp.hpl.jena.util.FileManager;
 import com.hp.hpl.jena.util.iterator.ExtendedIterator;
@@ -49,8 +50,6 @@ public class LODUCC {
 	public static final String JENA = "jena";
 	public static final String TDB = "tdb";
 	private boolean all = false;
-	private boolean onlyPerson = false;
-	private boolean onlyAthlete = false;
 	private String ns = null;
 	private String onlyProperty = null;
 	private String ontns = null;
@@ -59,6 +58,7 @@ public class LODUCC {
 	private List<String> classes = new ArrayList<String>();
 	private boolean tdb = false;
 	private OntModel ontology;
+	private String only;
 	
 	public LODUCC(String[] files, String mode) throws IllegalArgumentException, IllegalStateException, Exception {
 		PropertyConfigurator.configure("log4j.properties");
@@ -81,10 +81,8 @@ public class LODUCC {
 				readCsv("dbpedia_uniqueness.csv");
 			} else if (files[i].equals("owl:Thing")) {
 				this.all = true;
-			} else if (files[i].equals("onlyAthlete")) {
-				this.onlyAthlete = true;
-			} else if (files[i].equals("onlyPerson")) {
-				this.onlyPerson = true;
+			} else if (files[i].startsWith("-only=")) {
+				this.only = files[i].replaceFirst("-only=", "");
 			} else if(files[i].startsWith("-ontology=")) {
 				String ontologyLocation = files[i].replaceFirst("-ontology=", "");
 				Model ontologyModel = FileManager.get().loadModel(ontologyLocation);
@@ -126,12 +124,12 @@ public class LODUCC {
 
 		if (loadedDatasets > 0) {
 			long t2 = System.currentTimeMillis();
-			logger.warn("Loading the dataset took " + (t2 - t1) + " milliseconds to execute.");
+			logger.info("Loading the dataset took " + (t2 - t1) + " milliseconds to execute.");
 			
-			if (this.onlyAthlete) {
-				getUniqueness("Athlete");
-			} else if (this.onlyPerson) {
-				getUniqueness("Person");
+			if (this.only != null) {
+				if (this.ontology == null) throw new IllegalArgumentException("Missing ontology.");
+				logger.info("Analyzing only entities of type "+this.ontns+this.only);
+				getUniqueness(this.only);
 			} else {
 				getUniqueness();
 			}
@@ -140,30 +138,31 @@ public class LODUCC {
 	}
 	
 	private Boolean getUniqueness(String className) throws FileNotFoundException {
-		OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, dataset);
-
 		long t1 = System.currentTimeMillis();
 
 		if (all) {
 			calculcateUniquenessAll();
-		} else {
+		} else if (className != null) {
+			Resource ontologyClass = dataset.getResource(this.ontns+className);
+			OntClass ontologyClassObject = this.ontology.getOntClass(ontologyClass.getURI());
+			List<String> subjects = selectSubjects(ontologyClassObject);
+    		logger.info("Found "+subjects.size() + " entities of type "+ className);
+            calculcateUniqueness(ontologyClassObject, subjects);
+        } else {
+			OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, dataset);
 			for (Iterator<OntClass> i = ontology.listClasses(); i.hasNext();) {
 				OntClass ontologyClass = i.next();
 	            if (!ontologyClass.getURI().equals(ontns+className)) {
 	            	continue;
 	            }
 	
-	            if (onlyPerson || onlyAthlete) {
-	            	List<String> subjects = selectSubjects(ontologyClass);
-	        		logger.warn("Found "+subjects.size() + " entities of type "+ className);
-		            calculcateUniqueness(ontologyClass, subjects);
-	            }
+	            
 			}
 		}
 		
 
 		long t2 = System.currentTimeMillis();
-		logger.warn("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
+		logger.info("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
 		if (out != null) {
 			out.close();
 		}
@@ -183,12 +182,12 @@ public class LODUCC {
 	            	continue;
 	            }
 
-	            logger.warn("Fetching entities for ontology class " + ontologyClass.getURI().toString());
+	            logger.info("Fetching entities for ontology class " + ontologyClass.getURI().toString());
 
 	            int entityCount = 0;
 	            for (ExtendedIterator<Individual> j = ontology.listIndividuals(ontologyClass); j.hasNext(); ++entityCount ) j.next();
 	            if (entityCount > 0) {
-		            logger.warn("Found " + entityCount + " entities of type "+ ontologyClass.getURI());
+		            logger.info("Found " + entityCount + " entities of type "+ ontologyClass.getURI());
 	            	calculcateUniqueness(ontologyClass, entityCount);
 	            }
 			}
@@ -196,7 +195,7 @@ public class LODUCC {
 		
 
 		long t2 = System.currentTimeMillis();
-		logger.warn("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
+		logger.info("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
 		if (out != null) {
 			out.close();
 		}
@@ -382,15 +381,21 @@ public class LODUCC {
 	private List<String> selectSubjects(OntClass ontologyClass) {
 		List<String> entityURLs = new ArrayList<String>();
 		String sparql = "SELECT ?s ?t " + "WHERE { ";
-		if (onlyPerson || onlyAthlete) {
+		if (this.only != null) {
 			sparql += " ?s a <" + ontologyClass.getURI() + ">; "
-					+ " a ?t. } ORDER BY ?s ?t ";
+					+ " a ?t. }"; //  ORDER BY ?s ?t 
 		}
 		
 		// get subclasses
 		List<String> subclasses = new ArrayList<String>();
-		for (Iterator<OntClass> i = ontologyClass.listSubClasses(); i.hasNext(); ) {
-		  OntClass c = i.next();
+		ExtendedIterator<OntClass> subclassIterator;
+		if (this.only != null) {
+			subclassIterator = ontologyClass.listSubClasses(true);
+		} else {
+			subclassIterator = ontologyClass.listSubClasses();
+		}
+		while (subclassIterator.hasNext()) {
+		  OntClass c = subclassIterator.next();
 		  subclasses.add(c.getURI());
 		}
 		
@@ -403,13 +408,11 @@ public class LODUCC {
 			QuerySolution sol = rs.nextSolution();
 			RDFNode subject = sol.get("s");
 			RDFNode type = sol.get("t");
-			if (!subject.toString().startsWith(this.ns)) {
-				continue;
-			}
+			if (!subject.toString().startsWith(this.ns)) continue;
 			if (!entityURLs.contains(subject.toString()) && !toDelete.contains(subject.toString())) {
 				entityURLs.add(subject.toString());
 			}
-			if (this.onlyPerson  || this.onlyAthlete) {
+			if (this.only != null) {
 				//logger.warn("subclasses of Person: " + StringUtils.join(subclasses,","));
 				if (subclasses.contains(type.toString())) {
 					if (!toDelete.contains(subject.toString())) {
@@ -419,6 +422,56 @@ public class LODUCC {
 			}
 		}
 		qe.close();
+		
+		// if -only parameter given, exclude entities of subclasses
+		if (this.only != null) {
+			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
+					String subclass = (String) iterator.next();
+					logger.info("Excluding entities of type "+subclass);
+					
+					String sparql_subclass = "SELECT ?s ?t " + "WHERE { "
+							+ " ?s a <" + subclass + ">. }";
+					Query qry_subclass = QueryFactory.create(sparql_subclass);
+					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
+					ResultSet rs_subclass = qe_subclass.execSelect();
+					while (rs_subclass.hasNext()) {
+						QuerySolution sol_subclass = rs_subclass.nextSolution();
+						RDFNode subject_subclass = sol_subclass.get("s");
+						if (!subject_subclass.toString().startsWith(this.ns)) continue;
+						if (!toDelete.contains(subject_subclass.toString())) {
+							toDelete.add(subject_subclass.toString());
+						}
+	
+					}
+					qe_subclass.close();
+				}
+			}
+			
+		} else {	// add entities of subclasses (if not DBpedia and all classes given already)
+			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
+					String subclass = (String) iterator.next();
+					// logger.info("Adding entities of type "+subclass);
+					
+					String sparql_subclass = "SELECT ?s " + "WHERE { "
+							+ " ?s a <" + subclass + ">. }";
+					Query qry_subclass = QueryFactory.create(sparql_subclass);
+					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
+					ResultSet rs_subclass = qe_subclass.execSelect();
+					while (rs_subclass.hasNext()) {
+						QuerySolution sol_subclass = rs_subclass.nextSolution();
+						RDFNode subject_subclass = sol_subclass.get("s");
+						if (!subject_subclass.toString().startsWith(this.ns)) continue;
+						if (!entityURLs.contains(subject_subclass.toString()) && !toDelete.contains(subject_subclass.toString())) {
+							entityURLs.add(subject_subclass.toString());
+						}
+					}
+					qe_subclass.close();
+				}
+			}
+		}
+
 		for (Iterator<String> iterator = toDelete.iterator(); iterator.hasNext();) {
 			String delete = iterator.next();
 			entityURLs.remove(delete.toString());
