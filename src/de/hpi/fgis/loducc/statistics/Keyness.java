@@ -1,9 +1,11 @@
-package de.hpi.fgis.loducc;
+package de.hpi.fgis.loducc.statistics;
 
 import java.io.FileNotFoundException;
 import java.io.PrintWriter;
 import java.util.Iterator;
 import java.util.List;
+
+import de.hpi.fgis.loducc.CsvReader;
 
 public class Keyness {
 

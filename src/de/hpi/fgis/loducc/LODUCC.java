@@ -43,6 +43,8 @@ import com.hp.hpl.jena.util.FileManager;
 import com.hp.hpl.jena.util.iterator.ExtendedIterator;
 import com.sun.org.apache.xpath.internal.functions.WrongNumberArgsException;
 
+import de.hpi.fgis.loducc.statistics.Keyness;
+
 public class LODUCC {
 	private static final String DBPEDIA_ONTOLOGY_NS = "http://dbpedia.org/ontology/";
 	private static final String DBPEDIA_RESOURCE_NS = "http://dbpedia.org/resource/";
@@ -648,53 +650,6 @@ public class LODUCC {
 		return csv;
 	}
 
-	/**
-	 * 
-	 */
-	private void getCLasses() {
-		OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_DL_MEM_RDFS_INF, dataset);
-	        
-        // TODO: only classes in ontology namespace?
-		// setNumClusters(ontology.listClasses().toList().size());
-        
-        for (Iterator<OntClass> i = ontology.listHierarchyRootClasses(); i.hasNext(); ) {
-            OntClass hierarchyRoot = i.next();
-            logger.debug(hierarchyRoot);
-            for (Iterator<OntClass> j = hierarchyRoot.listSubClasses(); j.hasNext(); ) {
-                OntClass hierarchysubClass = j.next();
-                logger.debug("  " + hierarchysubClass);
-            }
-            
-        }
-	
-	}
-	
-	/**
-	 * 
-	 */
-	private void getProperties() {
-		String sparql = "SELECT DISTINCT ?p " +
-				"WHERE { " +
-				"?s ?p ?o. }";
-		//+ 
-		//		"FILTER (regex(?p, 'http://dbpedia.org')). }";
-		
-		List<String> subjects = new ArrayList<String>();
-		
-		Query qry = QueryFactory.create(sparql);
-		QueryExecution qe = QueryExecutionFactory.create(qry, this.dataset);
-		ResultSet rs = qe.execSelect();
-		
-		while(rs.hasNext()) {
-			QuerySolution sol = rs.nextSolution();
-			RDFNode str = sol.get("p"); 
-			logger.debug(str);
-			subjects.add(str.toString());
-		}
-		
-		qe.close(); 
-	}
-	
 	public static void main(String[] args) {
 		try {
 			new LODUCC(args, "jena");
