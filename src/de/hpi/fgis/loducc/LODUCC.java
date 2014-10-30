@@ -44,6 +44,7 @@ import com.hp.hpl.jena.util.iterator.ExtendedIterator;
 import com.sun.org.apache.xpath.internal.functions.WrongNumberArgsException;
 
 import de.hpi.fgis.loducc.statistics.Keyness;
+import de.hpi.fgis.loducc.statistics.Statistics;
 
 public class LODUCC {
 	private static final String DBPEDIA_ONTOLOGY_NS = "http://dbpedia.org/ontology/";
@@ -56,7 +57,7 @@ public class LODUCC {
 	private String ns = null;
 	private String onlyProperty = null;
 	private String ontns = null;
-	PrintWriter out;
+	private PrintWriter out;
 	private boolean jena;
 	private List<String> classes = new ArrayList<String>();
 	private boolean tdb = false;
@@ -199,52 +200,11 @@ public class LODUCC {
 			Resource ontologyClass = dataset.getResource(classUri);
 			OntClass ontologyClassObject = this.ontology.getOntClass(ontologyClass.getURI());
 			List<String> subjects = getEntityUris(ontologyClassObject);
-			if (subjects.size() > 0) {
-				logger.info("Found " + subjects.size() + " entities of type " + classUri);
-			}
             calculcateUniqueness(ontologyClassObject, subjects);
         } 
 	}
 	
-	/**
-	 * @param className
-	 * @param propertyName
-	 * @param propertyValues
-	 * @param entityCount
-	 */
-	private void getUniquenessValue(String className, String propertyName, HashMap<Key, Integer> propertyValues, int entityCount) {
-		Double uniqueness = null;
-		Double density = null;
-		Double overallCount = 0.0;
-		Double uniqueValues = 0.0;
-		Iterator<Entry<Key, Integer>> it = propertyValues.entrySet().iterator();
-	    while (it.hasNext()) {
-	        Entry<Key, Integer> pairs = it.next();
-	        //ArrayList<String> property = (ArrayList<String>) pairs.getKey();
-	        Integer count = (Integer) pairs.getValue();
-	        overallCount += count;
-	        if (count == 1) {
-	        	uniqueValues += 1;
-	        }
-		}
-	    System.out.print(className + "," + propertyName + "," + entityCount + ",");
-	    if (out != null) {
-	    	out.print(className + "," + propertyName + "," + entityCount + ",");
-	    }
-	    if (overallCount > 0) {
-		    uniqueness = uniqueValues/overallCount;
-		    density = overallCount/entityCount;
-		    System.out.println(uniqueness + "," + density + "," + Keyness.getKeyness(uniqueness, density));
-		    if (out != null) {
-		    	out.println(uniqueness + "," + density + "," + Keyness.getKeyness(uniqueness, density));
-		    }
-	    } else {
-	    	System.out.println(",");
-		    if (out != null) {
-		    	out.println(",");
-		    }
-	    }
-	}
+
 
 	/**
 	 * 
@@ -406,7 +366,7 @@ public class LODUCC {
 		  subclasses.add(subclass.getURI());
 		}
 		if (subclasses.size() > 0) {
-			logger.debug(ontologyClassUri + " - Subclasses: " + StringUtils.join(subclasses,","));
+			logger.debug("  Subclasses: " + StringUtils.join(subclasses,","));
 		}
 		
 		Query qry = QueryFactory.create(sparql);
@@ -437,7 +397,7 @@ public class LODUCC {
 			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
 				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
 					String subclass = (String) iterator.next();
-					logger.debug("Excluding entities of type "+subclass);
+					logger.debug("Excluding entities of type " + subclass);
 					
 					String sparql_subclass = "SELECT ?s ?t " + "WHERE { "
 							+ " ?s a <" + subclass + ">. }";
@@ -458,6 +418,9 @@ public class LODUCC {
 			}
 			
 		} else {	// add entities of subclasses (if not DBpedia and all classes given already)
+			if (entityURLs.size() > 0) {
+				logger.info("Found " + entityURLs.size() + " entities of type " + ontologyClassUri);
+			}
 			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
 				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
 					String subclass = (String) iterator.next();
@@ -467,18 +430,20 @@ public class LODUCC {
 					Query qry_subclass = QueryFactory.create(sparql_subclass);
 					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
 					ResultSet rs_subclass = qe_subclass.execSelect();
-					if (rs_subclass.hasNext()) {
-						logger.debug("Adding entities of type " + subclass);
-					}
+					int subclassEntityCount = 0;
 					while (rs_subclass.hasNext()) {
 						QuerySolution sol_subclass = rs_subclass.nextSolution();
 						RDFNode subject_subclass = sol_subclass.get("s");
 						if (!subject_subclass.toString().startsWith(this.ns)) continue;
 						if (!entityURLs.contains(subject_subclass.toString()) && !toDelete.contains(subject_subclass.toString())) {
 							entityURLs.add(subject_subclass.toString());
+							subclassEntityCount++;
 						}
 					}
 					qe_subclass.close();
+					if (subclassEntityCount > 0) {
+						logger.debug("  Added " + subclassEntityCount + " entities of type " + subclass + " to " + ontologyClassUri);
+					}
 				}
 			}
 		}
@@ -590,12 +555,13 @@ public class LODUCC {
 					propertyValues.put(keys, propertyValues.get(keys) + 1);
 				}
 			}
-			if (all) {
-				getUniquenessValue("http://www.w3.org/2002/07/owl#Thing",
-						property, propertyValues, entityCountThing);
+			Statistics stats = new Statistics();
+			if (this.all) {
+				stats.getUniquenessDensityKeyness("http://www.w3.org/2002/07/owl#Thing",
+						property, propertyValues, entityCountThing, this.out);
 			} else {
-				getUniquenessValue(ontologyClass.getURI(), property,
-						propertyValues, entityCount);
+				stats.getUniquenessDensityKeyness(ontologyClass.getURI(), property,
+						propertyValues, entityCount, this.out);
 			}
 		}
 	}

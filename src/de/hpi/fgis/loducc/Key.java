@@ -4,7 +4,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
-final class Key {
+public final class Key {
 
     private final List<String> list;
 
