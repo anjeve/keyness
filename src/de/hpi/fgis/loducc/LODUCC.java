@@ -12,6 +12,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
@@ -60,6 +61,13 @@ public class LODUCC {
 	private OntModel ontology;
 	private String only;
 	
+	/**
+	 * @param files
+	 * @param mode
+	 * @throws IllegalArgumentException
+	 * @throws IllegalStateException
+	 * @throws Exception
+	 */
 	public LODUCC(String[] files, String mode) throws IllegalArgumentException, IllegalStateException, Exception {
 		PropertyConfigurator.configure("log4j.properties");
 		logger.setLevel(Level.INFO);
@@ -77,7 +85,9 @@ public class LODUCC {
 		int loadedDatasets = 0;
 		
 		for (int i = 0; i < files.length; i++) {
-			if (files[i].equals("resume")) {
+			if (files[i].equals("debug")) {
+				logger.setLevel(Level.DEBUG);
+			} else  if (files[i].equals("resume")) {
 				readCsv("dbpedia_uniqueness.csv");
 			} else if (files[i].equals("owl:Thing")) {
 				this.all = true;
@@ -97,21 +107,17 @@ public class LODUCC {
 				this.out = new PrintWriter(files[i].replaceFirst("-out=", ""));
 			} else {
 				if (this.tdb) {
-					/*
 					if (loadedDatasets == 1) {
-						throw new WrongNumberArgsException("Please provide only one TDB folder. ("+files[i]+")");
+						throw new IllegalArgumentException("Please provide only one TDB folder ("+files[i]+").");
 					}
-					*/
 					String tbdDirectory = files[i];
-		            logger.info("Loaded " + files[i]);
 					Dataset ds = TDBFactory.createDataset(tbdDirectory) ;
 					this.dataset = ds.getDefaultModel() ;
-					loadedDatasets++;
 				} else if (this.jena) {
 					loadDump(files[i]);
-		            logger.info("Loaded " + files[i]);
-					loadedDatasets++;
 				}
+	            logger.info("Dataset loaded: " + files[i]);
+				loadedDatasets++;
 			}
 		}
 		
@@ -122,65 +128,48 @@ public class LODUCC {
 			this.ontns = DBPEDIA_ONTOLOGY_NS;
 		}
 
+		if (this.ontology == null) {
+			this.ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, this.dataset);
+		}
+		
 		if (loadedDatasets > 0) {
 			long t2 = System.currentTimeMillis();
-			logger.info("Loading the dataset took " + (t2 - t1) + " milliseconds to execute.");
+			logger.info("Loading the dataset took " + (t2 - t1) + " ms.");
 			
+			long t3 = System.currentTimeMillis();
 			if (this.only != null) {
 				if (this.ontology == null) throw new IllegalArgumentException("Missing ontology.");
-				logger.info("Analyzing only entities of type "+this.ontns+this.only);
-				getUniqueness(this.only);
+				logger.info("Analyzing only entities of type " + this.ontns + this.only);
+				getUniqueness(this.ontns+this.only);
 			} else {
 				getUniqueness();
 			}
+			long t4 = System.currentTimeMillis();
+			logger.info("Getting the uniqueness, density, and keyness took " + (t4 - t3) + " ms.");
+
 		}
 		this.dataset.close();
+		if (this.out != null) {
+			this.out.close();
+		}
 	}
 	
-	private Boolean getUniqueness(String className) throws FileNotFoundException {
-		long t1 = System.currentTimeMillis();
-
-		if (all) {
-			calculcateUniquenessAll();
-		} else if (className != null) {
-			Resource ontologyClass = dataset.getResource(this.ontns+className);
-			OntClass ontologyClassObject = this.ontology.getOntClass(ontologyClass.getURI());
-			List<String> subjects = selectSubjects(ontologyClassObject);
-    		logger.info("Found "+subjects.size() + " entities of type "+ className);
-            calculcateUniqueness(ontologyClassObject, subjects);
-        } else {
-			OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, dataset);
-			for (Iterator<OntClass> i = ontology.listClasses(); i.hasNext();) {
-				OntClass ontologyClass = i.next();
-	            if (!ontologyClass.getURI().equals(ontns+className)) {
-	            	continue;
-	            }
-	
-	            
-			}
-		}
-		
-
-		long t2 = System.currentTimeMillis();
-		logger.info("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
-		if (out != null) {
-			out.close();
-		}
-		return true;
-	}
-
-	private Boolean getUniqueness() throws FileNotFoundException {
-		long t1 = System.currentTimeMillis();
-		if (all) {
+	/**
+	 * @return
+	 * @throws FileNotFoundException
+	 */
+	private void getUniqueness() throws FileNotFoundException {
+		if (this.all) {
 			calculcateUniquenessAll();
 		} else {
-			OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, dataset);
-
-			for (Iterator<OntClass> i = ontology.listClasses(); i.hasNext();) {
+			for (Iterator<OntClass> i = this.ontology.listClasses(); i.hasNext();) {
 				OntClass ontologyClass = i.next();
-	            if (!ontologyClass.getURI().toString().startsWith(ontns) && !ontologyClass.getURI().toString().equals("http://www.w3.org/2002/07/owl#Thing")) {
-	            	continue;
-	            }
+				String classUri = ontologyClass.getURI();
+				if (!classUri.startsWith(this.ontns)) continue;
+				getUniqueness(classUri.toString());
+				
+				/*
+	            if (!ontologyClass.getURI().toString().startsWith(this.ontns) && !ontologyClass.getURI().toString().equals("http://www.w3.org/2002/07/owl#Thing")) continue;
 
 	            logger.info("Fetching entities for ontology class " + ontologyClass.getURI().toString());
 
@@ -188,20 +177,39 @@ public class LODUCC {
 	            for (ExtendedIterator<Individual> j = ontology.listIndividuals(ontologyClass); j.hasNext(); ++entityCount ) j.next();
 	            if (entityCount > 0) {
 		            logger.info("Found " + entityCount + " entities of type "+ ontologyClass.getURI());
-	            	calculcateUniqueness(ontologyClass, entityCount);
+		            calculcateUniqueness(ontologyClass, entityCount);
+	            	
 	            }
+	            */
 			}
 		}
-		
-
-		long t2 = System.currentTimeMillis();
-		logger.info("Getting the uniqueness and density took " + (t2 - t1) + " milliseconds to execute.");
-		if (out != null) {
-			out.close();
-		}
-		return true;
 	}
 	
+	/**
+	 * 
+	 * @param classUri
+	 * @throws FileNotFoundException
+	 */
+	private void getUniqueness(String classUri) throws FileNotFoundException {
+		if (all) {
+			calculcateUniquenessAll();
+		} else {
+			Resource ontologyClass = dataset.getResource(classUri);
+			OntClass ontologyClassObject = this.ontology.getOntClass(ontologyClass.getURI());
+			List<String> subjects = getEntityUris(ontologyClassObject);
+			if (subjects.size() > 0) {
+				logger.info("Found " + subjects.size() + " entities of type " + classUri);
+			}
+            calculcateUniqueness(ontologyClassObject, subjects);
+        } 
+	}
+	
+	/**
+	 * @param className
+	 * @param propertyName
+	 * @param propertyValues
+	 * @param entityCount
+	 */
 	private void getUniquenessValue(String className, String propertyName, HashMap<Key, Integer> propertyValues, int entityCount) {
 		Double uniqueness = null;
 		Double density = null;
@@ -236,24 +244,9 @@ public class LODUCC {
 	    }
 	}
 
-	private void getCLasses() {
-		OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_DL_MEM_RDFS_INF, dataset);
-	        
-        // TODO: only classes in ontology namespace?
-		// setNumClusters(ontology.listClasses().toList().size());
-        
-        for (Iterator<OntClass> i = ontology.listHierarchyRootClasses(); i.hasNext(); ) {
-            OntClass hierarchyRoot = i.next();
-            System.out.println(hierarchyRoot);
-            for (Iterator<OntClass> j = hierarchyRoot.listSubClasses(); j.hasNext(); ) {
-                OntClass hierarchysubClass = j.next();
-                System.out.println("  " + hierarchysubClass);
-            }
-            
-        }
-	
-	}
-	
+	/**
+	 * 
+	 */
 	private void calculcateUniquenessAll() {
 		int entityCountThing = 0;
 		/*
@@ -289,8 +282,8 @@ public class LODUCC {
 			QuerySolution sol = rs_s.nextSolution();
 			RDFNode subject = sol.get("s");
 			String subjectUri = subject.toString();
-			if (!subjectUri.startsWith(ns)) continue;
-			if (subjectUri.startsWith(ontns)) continue;
+			if (!subjectUri.startsWith(this.ns)) continue;
+			if (subjectUri.startsWith(this.ontns)) continue;
 			/*
 			if (subjects.contains(subjectUri)) continue;
 			subjects.add(subjectUri);
@@ -335,6 +328,10 @@ public class LODUCC {
 		//calculcateUniqueness(null, 0);
 	}
 
+	/**
+	 * @param entityCountThing
+	 * @param property
+	 */
 	private void calculateUniquenessPerProperty(int entityCountThing,
 			RDFNode property) {
 		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
@@ -378,14 +375,21 @@ public class LODUCC {
 		calculateUniquenessInternal(null, entityCountThing, entityCountThing, entities);
 	}
 	
-	private List<String> selectSubjects(OntClass ontologyClass) {
+	/**
+	 * @param ontologyClass
+	 * @return
+	 */
+	private List<String> getEntityUris(OntClass ontologyClass) {
+		String ontologyClassUri = ontologyClass.getURI();
 		List<String> entityURLs = new ArrayList<String>();
 		String sparql = "SELECT ?s ?t " + "WHERE { ";
-		if (this.only != null) {
-			sparql += " ?s a <" + ontologyClass.getURI() + ">; "
-					+ " a ?t. }"; //  ORDER BY ?s ?t 
+		// if DBpedia, get subclasses already from SPARQL
+		if (this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+			sparql += " ?s a <" + ontologyClassUri + ">; ";
+			sparql += " a ?t. } ";
+		} else {
+			sparql += " ?s a <" + ontologyClassUri + ">. } ";
 		}
-		
 		// get subclasses
 		List<String> subclasses = new ArrayList<String>();
 		ExtendedIterator<OntClass> subclassIterator;
@@ -395,8 +399,12 @@ public class LODUCC {
 			subclassIterator = ontologyClass.listSubClasses();
 		}
 		while (subclassIterator.hasNext()) {
-		  OntClass c = subclassIterator.next();
-		  subclasses.add(c.getURI());
+		  OntClass subclass = subclassIterator.next();
+		  if (!subclass.toString().startsWith(this.ontns)) continue;
+		  subclasses.add(subclass.getURI());
+		}
+		if (subclasses.size() > 0) {
+			logger.debug(ontologyClassUri + " - Subclasses: " + StringUtils.join(subclasses,","));
 		}
 		
 		Query qry = QueryFactory.create(sparql);
@@ -413,7 +421,6 @@ public class LODUCC {
 				entityURLs.add(subject.toString());
 			}
 			if (this.only != null) {
-				//logger.warn("subclasses of Person: " + StringUtils.join(subclasses,","));
 				if (subclasses.contains(type.toString())) {
 					if (!toDelete.contains(subject.toString())) {
 						toDelete.add(subject.toString());
@@ -428,7 +435,7 @@ public class LODUCC {
 			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
 				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
 					String subclass = (String) iterator.next();
-					logger.info("Excluding entities of type "+subclass);
+					logger.debug("Excluding entities of type "+subclass);
 					
 					String sparql_subclass = "SELECT ?s ?t " + "WHERE { "
 							+ " ?s a <" + subclass + ">. }";
@@ -452,13 +459,15 @@ public class LODUCC {
 			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
 				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
 					String subclass = (String) iterator.next();
-					// logger.info("Adding entities of type "+subclass);
 					
 					String sparql_subclass = "SELECT ?s " + "WHERE { "
 							+ " ?s a <" + subclass + ">. }";
 					Query qry_subclass = QueryFactory.create(sparql_subclass);
 					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
 					ResultSet rs_subclass = qe_subclass.execSelect();
+					if (rs_subclass.hasNext()) {
+						logger.debug("Adding entities of type " + subclass);
+					}
 					while (rs_subclass.hasNext()) {
 						QuerySolution sol_subclass = rs_subclass.nextSolution();
 						RDFNode subject_subclass = sol_subclass.get("s");
@@ -480,6 +489,10 @@ public class LODUCC {
 		return entityURLs;
 	}
 	
+	/**
+	 * @param ontologyClass
+	 * @param subjects
+	 */
 	private void calculcateUniqueness(OntClass ontologyClass, List<String> subjects) {
 		int entityCountThing = 0;
 		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
@@ -519,112 +532,13 @@ public class LODUCC {
 		calculateUniquenessInternal(ontologyClass, subjects.size(),
 				entityCountThing, entities);
 	}
-	
-	private void calculcateUniqueness(OntClass ontologyClass, int entityCount) {
-		//get entity count for owl:Thing
-		int entityCountThing = 0;
-		if (this.all) {
-            logger.info("Starting entity count.");
-			String entityCountAllSparql = "SELECT DISTINCT ?s WHERE { "
-					+ " ?s a ?t. } ";
 
-			/*
-			String entityCountAllSparql = "SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { ?s ?p ?t. "
-					+ "FILTER regex(str(?s), \"^"+ ns + "\")"
-					+ "}";
-			*/
-			Query qryAll = QueryFactory.create(entityCountAllSparql );
-			QueryExecution qeAll = QueryExecutionFactory.create(qryAll, dataset);
-			ResultSet rsAll = qeAll.execSelect();
-			while (rsAll.hasNext()) {
-				QuerySolution sol = rsAll.nextSolution();
-				RDFNode subject = sol.get("s");
-				if (!subject.toString().startsWith(ns)) {
-					continue;
-				}
-
-				entityCountThing += 1;
-			}
-/*			while (rsAll.hasNext()) {
-				QuerySolution sol = rsAll.nextSolution();
-				entityCountThing = sol.getLiteral("count").getInt();
-			}
-			*/
-			qeAll.close();
-            logger.info("Found " + entityCountThing + " entities of type owl:Thing");
-		}
-		
-		// get Uniqueness
-		String sparql = "";
-		/*
-		if (this.all) {
-			
-		} else (this.onlyProperty != null) {
-			
-		} else {
-			
-		}
-		*/
-
-		if (onlyProperty != null) {
-			sparql = "SELECT ?s ?o WHERE { ";
-		} else {
-			sparql = "SELECT ?s ?p ?o " + "WHERE { ";
-		}
-		if (!this.all) {
-			sparql += " ?s a <" + ontologyClass.getURI() + ">; "
-					+ " ?p ?o. } ORDER BY ?s ?p ";
-		} else {
-			if (onlyProperty != null) {
-				sparql += " ?s <" + onlyProperty + "> ?o. } ORDER BY ?s ";
-			} else {
-				sparql += " ?s ?p ?o. } ORDER BY ?s ?p ";
-			}
-		}
-		
-		Query qry = QueryFactory.create(sparql);
-		QueryExecution qe = QueryExecutionFactory.create(qry, dataset);
-		ResultSet rs = qe.execSelect();
-
-		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
-		while (rs.hasNext()) {
-			QuerySolution sol = rs.nextSolution();
-			RDFNode subject = sol.get("s");
-			if (!subject.toString().startsWith(ns)) {
-				continue;
-			}
-			String predicate = null;
-			if (onlyProperty != null) {
-				predicate = onlyProperty;
-			} else {
-				RDFNode predicateNode = sol.get("p");
-				predicate = predicateNode.toString();
-			}
-			RDFNode object = sol.get("o");
-			if (!entities.containsKey(subject.toString())) {
-				HashMap<String, List<String>> predicates = new HashMap<String, List<String>>();
-				List<String> objects = new ArrayList<String>();
-				objects.add(object.toString());
-				predicates.put(predicate, objects);
-				entities.put(subject.toString(), predicates);
-			} else {
-				HashMap<String, List<String>> predicates = entities.get(subject
-						.toString());
-				List<String> objects = new ArrayList<String>();
-				if (predicates.containsKey(predicate)) {
-					objects = predicates.get(predicate);
-				}
-				objects.add(object.toString());
-				predicates.put(predicate, objects);
-				entities.put(subject.toString(), predicates);
-			}
-		}
-		qe.close();
-		logger.info("Done building property map");
-
-		calculateUniquenessInternal(ontologyClass, entityCount, entityCountThing, entities);
-	}
-
+	/**
+	 * @param ontologyClass
+	 * @param entityCount
+	 * @param entityCountThing
+	 * @param entities
+	 */
 	private void calculateUniquenessInternal(OntClass ontologyClass,
 			int entityCount, int entityCountThing,
 			HashMap<String, HashMap<String, List<String>>> entities) {
@@ -684,29 +598,11 @@ public class LODUCC {
 		}
 	}
 	
-	private void getProperties() {
-		String sparql = "SELECT DISTINCT ?p " +
-				"WHERE { " +
-				"?s ?p ?o. }";
-		//+ 
-		//		"FILTER (regex(?p, 'http://dbpedia.org')). }";
-		
-		List<String> subjects = new ArrayList<String>();
-		
-		Query qry = QueryFactory.create(sparql);
-		QueryExecution qe = QueryExecutionFactory.create(qry, dataset);
-		ResultSet rs = qe.execSelect();
-		
-		while(rs.hasNext()) {
-			QuerySolution sol = rs.nextSolution();
-			RDFNode str = sol.get("p"); 
-			System.out.println(str);
-			subjects.add(str.toString());
-		}
-		
-		qe.close(); 
-	}
-	
+
+	/**
+	 * @param file
+	 * @throws Exception
+	 */
 	private void loadDump(String file) throws Exception {
 		try {
 			Model dataset1 = FileManager.get().loadModel(file);
@@ -718,6 +614,10 @@ public class LODUCC {
 		}
 	}
 	
+	/**
+	 * @param csvFileToRead
+	 * @return
+	 */
 	private HashMap<String, String> readCsv(String csvFileToRead) {
 		HashMap<String, String> csv = new HashMap<String, String>();
 		BufferedReader br = null;
@@ -748,17 +648,61 @@ public class LODUCC {
 		return csv;
 	}
 
+	/**
+	 * 
+	 */
+	private void getCLasses() {
+		OntModel ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_DL_MEM_RDFS_INF, dataset);
+	        
+        // TODO: only classes in ontology namespace?
+		// setNumClusters(ontology.listClasses().toList().size());
+        
+        for (Iterator<OntClass> i = ontology.listHierarchyRootClasses(); i.hasNext(); ) {
+            OntClass hierarchyRoot = i.next();
+            logger.debug(hierarchyRoot);
+            for (Iterator<OntClass> j = hierarchyRoot.listSubClasses(); j.hasNext(); ) {
+                OntClass hierarchysubClass = j.next();
+                logger.debug("  " + hierarchysubClass);
+            }
+            
+        }
+	
+	}
+	
+	/**
+	 * 
+	 */
+	private void getProperties() {
+		String sparql = "SELECT DISTINCT ?p " +
+				"WHERE { " +
+				"?s ?p ?o. }";
+		//+ 
+		//		"FILTER (regex(?p, 'http://dbpedia.org')). }";
+		
+		List<String> subjects = new ArrayList<String>();
+		
+		Query qry = QueryFactory.create(sparql);
+		QueryExecution qe = QueryExecutionFactory.create(qry, this.dataset);
+		ResultSet rs = qe.execSelect();
+		
+		while(rs.hasNext()) {
+			QuerySolution sol = rs.nextSolution();
+			RDFNode str = sol.get("p"); 
+			logger.debug(str);
+			subjects.add(str.toString());
+		}
+		
+		qe.close(); 
+	}
+	
 	public static void main(String[] args) {
 		try {
 			new LODUCC(args, "jena");
 		} catch (IllegalArgumentException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (IllegalStateException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (Exception e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 	}
