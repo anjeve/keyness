@@ -54,12 +54,15 @@ public class LODUCC {
 	public static final String JENA = "jena";
 	public static final String TDB = "tdb";
 	private boolean all = false;
+	private boolean resume = false;
 	private String ns = null;
 	private String onlyProperty = null;
 	private String ontns = null;
+	private String outputLocation;
 	private PrintWriter out;
 	private boolean jena;
 	private List<String> classes = new ArrayList<String>();
+	private List<String> alreadyProfiledClasses = new ArrayList<String>();
 	private boolean tdb = false;
 	private OntModel ontology;
 	private String only;
@@ -91,7 +94,7 @@ public class LODUCC {
 			if (files[i].equals("debug")) {
 				logger.setLevel(Level.DEBUG);
 			} else  if (files[i].equals("resume")) {
-				readCsv("dbpedia_uniqueness.csv");
+				resume = true;
 			} else if (files[i].equals("owl:Thing")) {
 				this.all = true;
 			} else if (files[i].startsWith("-only=")) {
@@ -107,15 +110,10 @@ public class LODUCC {
 			} else if(files[i].startsWith("-property=")) {
 				this.onlyProperty = files[i].replaceFirst("-property=", "");
 			} else if (files[i].startsWith("-out=")) {
-				this.out = new PrintWriter(files[i].replaceFirst("-out=", ""));
+				this.outputLocation = files[i].replaceFirst("-out=", "");
 			} else {
 				if (this.tdb) {
-					if (loadedDatasets == 1) {
-						throw new IllegalArgumentException("Please provide only one TDB folder ("+files[i]+").");
-					}
-					String tbdDirectory = files[i];
-					Dataset ds = TDBFactory.createDataset(tbdDirectory) ;
-					this.dataset = ds.getDefaultModel() ;
+					loadTdb(files[i], loadedDatasets);
 				} else if (this.jena) {
 					loadDump(files[i]);
 				}
@@ -124,6 +122,10 @@ public class LODUCC {
 			}
 		}
 		
+		if (loadedDatasets == 0) {
+			throw new IllegalArgumentException("Provide at least one dataset to load.");
+		}
+
 		if (this.ns == null) {
 			this.ns = DBPEDIA_RESOURCE_NS;
 		}
@@ -135,28 +137,34 @@ public class LODUCC {
 			this.ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, this.dataset);
 		}
 		
-		if (loadedDatasets > 0) {
-			long t2 = System.currentTimeMillis();
-			logger.info("Loading the dataset took " + (t2 - t1) + " ms.");
-			
-			long t3 = System.currentTimeMillis();
-			if (this.only != null) {
-				if (this.ontology == null) throw new IllegalArgumentException("Missing ontology.");
-				logger.info("Analyzing only entities of type " + this.ontns + this.only);
-				getUniqueness(this.ontns+this.only);
-			} else {
-				getUniqueness();
-			}
-			long t4 = System.currentTimeMillis();
-			logger.info("Getting the uniqueness, density, and keyness took " + (t4 - t3) + " ms.");
-
+		if ((this.resume) && (this.outputLocation != null)) {
+			readCsv(this.outputLocation);
+			this.outputLocation = this.outputLocation.replace(".csv", "_resumed.csv"); 
 		}
+		if (this.out != null) {
+			this.out = new PrintWriter(this.outputLocation);
+		}
+		
+		long t2 = System.currentTimeMillis();
+		logger.info("Loading the dataset took " + (t2 - t1) + " ms.");
+		
+		long t3 = System.currentTimeMillis();
+		if (this.only != null) {
+			if (this.ontology == null) throw new IllegalArgumentException("Missing ontology.");
+			logger.info("Analyzing only entities of type " + this.ontns + this.only);
+			getUniqueness(this.ontns+this.only);
+		} else {
+			getUniqueness();
+		}
+		long t4 = System.currentTimeMillis();
+		logger.info("Getting the uniqueness, density, and keyness took " + (t4 - t3) + " ms.");
+
 		this.dataset.close();
 		if (this.out != null) {
 			this.out.close();
 		}
 	}
-	
+
 	/**
 	 * @return
 	 * @throws FileNotFoundException
@@ -169,6 +177,7 @@ public class LODUCC {
 				OntClass ontologyClass = i.next();
 				String classUri = ontologyClass.getURI();
 				if (!classUri.startsWith(this.ontns)) continue;
+				if (this.resume && this.alreadyProfiledClasses.contains(classUri)) continue;
 				getUniqueness(classUri.toString());
 				
 				/*
@@ -535,8 +544,6 @@ public class LODUCC {
 			}
 		}
 
-		//logger.warn("Done building property value sets");
-
 		Iterator<Entry<String, List<List<String>>>> propertyIt = propertyValueMap
 				.entrySet().iterator();
 		while (propertyIt.hasNext()) {
@@ -574,46 +581,51 @@ public class LODUCC {
 	private void loadDump(String file) throws Exception {
 		try {
 			Model dataset1 = FileManager.get().loadModel(file);
-			dataset.add(dataset1);
+			this.dataset.add(dataset1);
 		} catch (Exception e) {
 			logger.error("Error loading file: "+file);
 			e.printStackTrace(System.out);
 			System.exit(0);
 		}
 	}
-	
+
+	/**
+	 * @param file
+	 * @throws Exception
+	 */
+	private void loadTdb(String file, int loadedDatasets) {
+		if (loadedDatasets == 1) {
+			throw new IllegalArgumentException("Please provide only one TDB folder (" + file + ").");
+		}
+		String tbdDirectory = file;
+		Dataset ds = TDBFactory.createDataset(tbdDirectory) ;
+		this.dataset = ds.getDefaultModel();
+	}
+
 	/**
 	 * @param csvFileToRead
 	 * @return
 	 */
-	private HashMap<String, String> readCsv(String csvFileToRead) {
-		HashMap<String, String> csv = new HashMap<String, String>();
-		BufferedReader br = null;
+	private void readCsv(String csvFileToRead) {
 		String line = "";
 		String splitBy = ",";
 
 		try {
-			br = new BufferedReader(new FileReader(csvFileToRead));
+			BufferedReader br = new BufferedReader(new FileReader(csvFileToRead));
 			while ((line = br.readLine()) != null) {
 				String[] csvLine = line.split(splitBy);
-				if (csvLine.length == 3) {
-					csv.put(csvLine[0], csvLine[1]);
+				if (csvLine.length > 1) {
+					if (!this.alreadyProfiledClasses.contains(csvLine[0])) {
+						this.alreadyProfiledClasses.add(csvLine[0]);
+					}
 				}
 			}
+			br.close();
 		} catch (FileNotFoundException e) {
 			e.printStackTrace();
 		} catch (IOException e) {
 			e.printStackTrace();
-		} finally {
-			if (br != null) {
-				try {
-					br.close();
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
 		}
-		return csv;
 	}
 
 	public static void main(String[] args) {
