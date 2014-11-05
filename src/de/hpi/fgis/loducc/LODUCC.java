@@ -1,6 +1,7 @@
 package de.hpi.fgis.loducc;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
@@ -21,6 +22,7 @@ import com.hp.hpl.jena.ontology.Individual;
 import com.hp.hpl.jena.ontology.OntModel;
 import com.hp.hpl.jena.ontology.OntModelSpec;
 import com.hp.hpl.jena.ontology.OntClass;
+import com.hp.hpl.jena.ontology.OntResource;
 import com.hp.hpl.jena.query.Dataset;
 import com.hp.hpl.jena.query.Query;
 import com.hp.hpl.jena.query.QueryExecution;
@@ -53,6 +55,7 @@ public class LODUCC {
 	private static final Logger logger = Logger.getLogger(LODUCC.class);
 	public static final String JENA = "jena";
 	public static final String TDB = "tdb";
+	private static final String RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 	private boolean all = false;
 	private boolean resume = false;
 	private String ns = null;
@@ -66,6 +69,8 @@ public class LODUCC {
 	private boolean tdb = false;
 	private OntModel ontology;
 	private String only;
+	private boolean datasetLoadedAsOnt;
+	private String resumeLocation;
 	
 	/**
 	 * @param files
@@ -93,8 +98,9 @@ public class LODUCC {
 		for (int i = 0; i < files.length; i++) {
 			if (files[i].equals("debug")) {
 				logger.setLevel(Level.DEBUG);
-			} else  if (files[i].equals("resume")) {
-				resume = true;
+			} else if(files[i].startsWith("-resume=")) {
+				this.resume = true;
+				this.resumeLocation = files[i].replaceFirst("-resume=", "");
 			} else if (files[i].equals("owl:Thing")) {
 				this.all = true;
 			} else if (files[i].startsWith("-only=")) {
@@ -135,14 +141,26 @@ public class LODUCC {
 
 		if (this.ontology == null) {
 			this.ontology = ModelFactory.createOntologyModel(OntModelSpec.OWL_MEM, this.dataset);
+			this.datasetLoadedAsOnt = true;
 		}
 		
-		if ((this.resume) && (this.outputLocation != null)) {
-			readCsv(this.outputLocation);
-			this.outputLocation = this.outputLocation.replace(".csv", "_resumed.csv"); 
+		if (this.outputLocation == null) {
+			// TODO create useful output file name
+			this.outputLocation = "output.csv";
 		}
-		if (this.out != null) {
+
+		if ((this.resume) && (this.resumeLocation != null)) {
+			readCsv(this.resumeLocation);
+			logger.info("Resuming " + this.resumeLocation);
+		}
+		
+		if (this.out == null) {
+			// TODO check if file available
+			if (this.resume && (this.outputLocation == null)) {
+				this.outputLocation = this.resumeLocation.replace(".csv", "_resumed.csv");
+			}
 			this.out = new PrintWriter(this.outputLocation);
+			logger.info("Output: "+this.outputLocation);
 		}
 		
 		long t2 = System.currentTimeMillis();
@@ -152,9 +170,9 @@ public class LODUCC {
 		if (this.only != null) {
 			if (this.ontology == null) throw new IllegalArgumentException("Missing ontology.");
 			logger.info("Analyzing only entities of type " + this.ontns + this.only);
-			getUniqueness(this.ontns+this.only);
+			profileKeyness(this.ontns+this.only);
 		} else {
-			getUniqueness();
+			profileKeyness();
 		}
 		long t4 = System.currentTimeMillis();
 		logger.info("Getting the uniqueness, density, and keyness took " + (t4 - t3) + " ms.");
@@ -166,33 +184,21 @@ public class LODUCC {
 	}
 
 	/**
-	 * @return
 	 * @throws FileNotFoundException
 	 */
-	private void getUniqueness() throws FileNotFoundException {
+	private void profileKeyness() throws FileNotFoundException {
 		if (this.all) {
-			calculcateUniquenessAll();
+			profileKeynessForAllEntities();
 		} else {
 			for (Iterator<OntClass> i = this.ontology.listClasses(); i.hasNext();) {
 				OntClass ontologyClass = i.next();
 				String classUri = ontologyClass.getURI();
 				if (!classUri.startsWith(this.ontns)) continue;
-				if (this.resume && this.alreadyProfiledClasses.contains(classUri)) continue;
-				getUniqueness(classUri.toString());
-				
-				/*
-	            if (!ontologyClass.getURI().toString().startsWith(this.ontns) && !ontologyClass.getURI().toString().equals("http://www.w3.org/2002/07/owl#Thing")) continue;
-
-	            logger.info("Fetching entities for ontology class " + ontologyClass.getURI().toString());
-
-	            int entityCount = 0;
-	            for (ExtendedIterator<Individual> j = ontology.listIndividuals(ontologyClass); j.hasNext(); ++entityCount ) j.next();
-	            if (entityCount > 0) {
-		            logger.info("Found " + entityCount + " entities of type "+ ontologyClass.getURI());
-		            calculcateUniqueness(ontologyClass, entityCount);
-	            	
-	            }
-	            */
+				if (this.resume && this.alreadyProfiledClasses.contains(classUri)) {
+					logger.debug("Skipping class " + ontologyClass.getURI());
+					continue;
+				}
+				profileKeyness(ontologyClass);
 			}
 		}
 	}
@@ -202,14 +208,28 @@ public class LODUCC {
 	 * @param classUri
 	 * @throws FileNotFoundException
 	 */
-	private void getUniqueness(String classUri) throws FileNotFoundException {
+	private void profileKeyness(OntClass ontologyClass) throws FileNotFoundException {
 		if (all) {
-			calculcateUniquenessAll();
+			profileKeynessForAllEntities();
+		} else {
+			logger.debug("Profiling class " + ontologyClass.getURI());
+			HashSet<String> subjects = getEntityUris(ontologyClass);
+            outputKeynessStatistics(ontologyClass, subjects);
+        } 
+	}
+
+	/**
+	 * 
+	 * @param classUri
+	 * @throws FileNotFoundException
+	 */
+	private void profileKeyness(String classUri) throws FileNotFoundException {
+		if (all) {
+			profileKeynessForAllEntities();
 		} else {
 			Resource ontologyClass = dataset.getResource(classUri);
 			OntClass ontologyClassObject = this.ontology.getOntClass(ontologyClass.getURI());
-			List<String> subjects = getEntityUris(ontologyClassObject);
-            calculcateUniqueness(ontologyClassObject, subjects);
+			profileKeyness(ontologyClassObject);
         } 
 	}
 	
@@ -218,28 +238,8 @@ public class LODUCC {
 	/**
 	 * 
 	 */
-	private void calculcateUniquenessAll() {
+	private void profileKeynessForAllEntities() {
 		int entityCountThing = 0;
-		/*
-		ResIterator it = dataset.listSubjects();
-		// alternative: listIndividuals on OntModel
-		List<Integer> subjects = new ArrayList<Integer>();
-		while (it.hasNext()) {
-			Resource subject = (Resource) it.next();
-			String subjectUri = subject.getURI();
-			if (!subjectUri.startsWith(ns)) continue;
-			if (subjects.contains(subjectUri.hashCode())) continue;
-			subjects.add(subjectUri.hashCode());
-			entityCountThing++;
-			if (entityCountThing%10000 == 0) {
-				logger.info(entityCountThing);
-			}
-		}
-		logger.info("Found "+entityCountThing+" entities of type owl:Thing");
-		subjects = null;
-		*/
-		
-		//HashSet<String> subjects = new HashSet<String>();
 		String sparql_s = "SELECT DISTINCT ?s " + "WHERE { ";
 		if (this.ns.equals(DBPEDIA_RESOURCE_NS)) {
 			sparql_s += "?s a <http://www.w3.org/2002/07/owl#Thing>. } ";
@@ -255,17 +255,10 @@ public class LODUCC {
 			String subjectUri = subject.toString();
 			if (!subjectUri.startsWith(this.ns)) continue;
 			if (subjectUri.startsWith(this.ontns)) continue;
-			/*
-			if (subjects.contains(subjectUri)) continue;
-			subjects.add(subjectUri);
-			*/
 			entityCountThing++;
 		}
 		qe_s.close();
 		logger.info("Found "+entityCountThing+" entities of type owl:Thing");
-		//subjects = null;
-		
-
 		
 		String sparql = "SELECT DISTINCT ?p " + "WHERE { "
 				+ "?s ?p ?o. } ";
@@ -275,35 +268,18 @@ public class LODUCC {
 		while (rs.hasNext()) {
 			QuerySolution sol = rs.nextSolution();
 			RDFNode property = sol.get("p");
-			calculateUniquenessPerProperty(entityCountThing, property);
+			profileKeynessPerProperty(entityCountThing, property);
 		}
 		qe.close();
-		
-		/*
-		//ResIterator objectProperties = dataset.listSubjectsWithProperty(ResourceFactory.createProperty("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), ResourceFactory.createResource("http://www.w3.org/2002/07/owl#ObjectProperty"));
-		ExtendedIterator<OntProperty> objectProperties = ontology.listAllOntProperties();
-		while (objectProperties.hasNext()) {
-			RDFNode property = objectProperties.next();
-			logger.info(property.toString());
-			calculateUniquenessPerProperty(entityCountThing, property);
-		}
-
-		ResIterator datatypeProperties = dataset.listSubjectsWithProperty(ResourceFactory.createProperty("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), ResourceFactory.createResource("http://www.w3.org/2002/07/owl#DatatypeProperty"));
-		while (datatypeProperties.hasNext()) {
-			RDFNode property = datatypeProperties.next();
-
-			calculateUniquenessPerProperty(entityCountThing, property);
-
-		}
-		*/
-		//calculcateUniqueness(null, 0);
 	}
 
 	/**
+	 * TODO refactor
+	 * 
 	 * @param entityCountThing
 	 * @param property
 	 */
-	private void calculateUniquenessPerProperty(int entityCountThing,
+	private void profileKeynessPerProperty(int entityCountThing,
 			RDFNode property) {
 		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
 		
@@ -343,135 +319,17 @@ public class LODUCC {
 			}
 		}
 		
-		calculateUniquenessInternal(null, entityCountThing, entityCountThing, entities);
+		outputKeynessStatistics(null, entityCountThing, entityCountThing, entities);
 	}
 	
-	/**
-	 * @param ontologyClass
-	 * @return
-	 */
-	private List<String> getEntityUris(OntClass ontologyClass) {
-		String ontologyClassUri = ontologyClass.getURI();
-		List<String> entityURLs = new ArrayList<String>();
-		String sparql = "SELECT ?s ?t " + "WHERE { ";
-		// if DBpedia, get subclasses already from SPARQL
-		if (this.ns.equals(DBPEDIA_RESOURCE_NS)) {
-			sparql += " ?s a <" + ontologyClassUri + ">; ";
-			sparql += " a ?t. } ";
-		} else {
-			sparql += " ?s a <" + ontologyClassUri + ">. } ";
-		}
-		// get subclasses
-		List<String> subclasses = new ArrayList<String>();
-		ExtendedIterator<OntClass> subclassIterator;
-		if (this.only != null) {
-			subclassIterator = ontologyClass.listSubClasses(true);
-		} else {
-			subclassIterator = ontologyClass.listSubClasses();
-		}
-		while (subclassIterator.hasNext()) {
-		  OntClass subclass = subclassIterator.next();
-		  if (!subclass.toString().startsWith(this.ontns)) continue;
-		  subclasses.add(subclass.getURI());
-		}
-		if (subclasses.size() > 0) {
-			logger.debug("  Subclasses: " + StringUtils.join(subclasses,","));
-		}
-		
-		Query qry = QueryFactory.create(sparql);
-		QueryExecution qe = QueryExecutionFactory.create(qry, this.dataset);
-		ResultSet rs = qe.execSelect();
 
-		List<String> toDelete = new ArrayList<String>();
-		while (rs.hasNext()) {
-			QuerySolution sol = rs.nextSolution();
-			RDFNode subject = sol.get("s");
-			RDFNode type = sol.get("t");
-			if (!subject.toString().startsWith(this.ns)) continue;
-			if (!entityURLs.contains(subject.toString()) && !toDelete.contains(subject.toString())) {
-				entityURLs.add(subject.toString());
-			}
-			if (this.only != null) {
-				if (subclasses.contains(type.toString())) {
-					if (!toDelete.contains(subject.toString())) {
-						toDelete.add(subject.toString());
-					}
-				}
-			}
-		}
-		qe.close();
-		
-		// if -only parameter given, exclude entities of subclasses
-		if (this.only != null) {
-			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
-				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
-					String subclass = (String) iterator.next();
-					logger.debug("Excluding entities of type " + subclass);
-					
-					String sparql_subclass = "SELECT ?s ?t " + "WHERE { "
-							+ " ?s a <" + subclass + ">. }";
-					Query qry_subclass = QueryFactory.create(sparql_subclass);
-					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
-					ResultSet rs_subclass = qe_subclass.execSelect();
-					while (rs_subclass.hasNext()) {
-						QuerySolution sol_subclass = rs_subclass.nextSolution();
-						RDFNode subject_subclass = sol_subclass.get("s");
-						if (!subject_subclass.toString().startsWith(this.ns)) continue;
-						if (!toDelete.contains(subject_subclass.toString())) {
-							toDelete.add(subject_subclass.toString());
-						}
-	
-					}
-					qe_subclass.close();
-				}
-			}
-			
-		} else {	// add entities of subclasses (if not DBpedia and all classes given already)
-			if (entityURLs.size() > 0) {
-				logger.info("Found " + entityURLs.size() + " entities of type " + ontologyClassUri);
-			}
-			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
-				for (Iterator<String> iterator = subclasses.iterator(); iterator.hasNext();) {
-					String subclass = (String) iterator.next();
-					
-					String sparql_subclass = "SELECT ?s " + "WHERE { "
-							+ " ?s a <" + subclass + ">. }";
-					Query qry_subclass = QueryFactory.create(sparql_subclass);
-					QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
-					ResultSet rs_subclass = qe_subclass.execSelect();
-					int subclassEntityCount = 0;
-					while (rs_subclass.hasNext()) {
-						QuerySolution sol_subclass = rs_subclass.nextSolution();
-						RDFNode subject_subclass = sol_subclass.get("s");
-						if (!subject_subclass.toString().startsWith(this.ns)) continue;
-						if (!entityURLs.contains(subject_subclass.toString()) && !toDelete.contains(subject_subclass.toString())) {
-							entityURLs.add(subject_subclass.toString());
-							subclassEntityCount++;
-						}
-					}
-					qe_subclass.close();
-					if (subclassEntityCount > 0) {
-						logger.debug("  Added " + subclassEntityCount + " entities of type " + subclass + " to " + ontologyClassUri);
-					}
-				}
-			}
-		}
-
-		for (Iterator<String> iterator = toDelete.iterator(); iterator.hasNext();) {
-			String delete = iterator.next();
-			entityURLs.remove(delete.toString());
-			
-		}
-		return entityURLs;
-	}
-	
 	/**
 	 * @param ontologyClass
 	 * @param subjects
 	 */
-	private void calculcateUniqueness(OntClass ontologyClass, List<String> subjects) {
+	private void outputKeynessStatistics(OntClass ontologyClass, HashSet<String> subjects) {
 		int entityCountThing = 0;
-		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
+		HashMap<String, HashMap<Key, Integer>> propertiesPropertyValueMap = new HashMap<String, HashMap<Key, Integer>>();
 		for (Iterator<String> iterator = subjects.iterator(); iterator.hasNext();) {
 			String subject = iterator.next();
 			
@@ -482,31 +340,65 @@ public class LODUCC {
 			QueryExecution qe = QueryExecutionFactory.create(qry, dataset);
 			ResultSet rs = qe.execSelect();
 
+			//HashMap<Key, Integer> propertyValues = new HashMap<Key, Integer>();
+			
+			boolean firstProperty = true;
+			String currentProperty = "";
+			List<String> currentPropertyValues = new ArrayList<String>();
 			while (rs.hasNext()) {
 				QuerySolution sol = rs.nextSolution();
-				RDFNode predicate = sol.get("p");
+				RDFNode property = sol.get("p");
 				RDFNode object = sol.get("o");
-				if (!entities.containsKey(subject)) {
-					HashMap<String, List<String>> predicates = new HashMap<String, List<String>>();
-					List<String> objects = new ArrayList<String>();
-					objects.add(object.toString());
-					predicates.put(predicate.toString(), objects);
-					entities.put(subject.toString(), predicates);
-				} else {
-					HashMap<String, List<String>> predicates = entities.get(subject);
-					List<String> objects = new ArrayList<String>();
-					if (predicates.containsKey(predicate.toString())) {
-						objects = predicates.get(predicate.toString());
+				String propertyUri = property.toString();
+				if (!currentProperty.equals(propertyUri)) {
+					if (firstProperty) {
+						firstProperty = false;
+					} else {
+						Key keys = new Key(currentPropertyValues);
+						if (propertiesPropertyValueMap.containsKey(currentProperty)) {
+							HashMap<Key, Integer> existingPropertyValues = propertiesPropertyValueMap.get(currentProperty);
+							existingPropertyValues = addPropertyValueCount(existingPropertyValues, keys);
+							propertiesPropertyValueMap.put(currentProperty, existingPropertyValues);
+						} else {
+							HashMap<Key, Integer> propertyValues = new HashMap<Key, Integer>();
+							propertyValues = addPropertyValueCount(propertyValues, keys);
+							propertiesPropertyValueMap.put(currentProperty, propertyValues);
+						}
 					}
-					objects.add(object.toString());
-					predicates.put(predicate.toString(), objects);
-					entities.put(subject.toString(), predicates);
-				}
+					currentProperty = propertyUri;
+					currentPropertyValues = new ArrayList<String>();
+				} 
+				currentPropertyValues.add(object.toString());
 			}
+			// add last property
+			if (currentPropertyValues.size() > 0) {
+				Key keys = new Key(currentPropertyValues);
+				if (propertiesPropertyValueMap.containsKey(currentProperty)) {
+					HashMap<Key, Integer> existingPropertyValues = propertiesPropertyValueMap.get(currentProperty);
+					existingPropertyValues = addPropertyValueCount(existingPropertyValues, keys);
+					propertiesPropertyValueMap.put(currentProperty, existingPropertyValues);
+				} else {
+					HashMap<Key, Integer> propertyValues = new HashMap<Key, Integer>();
+					propertyValues = addPropertyValueCount(propertyValues, keys);
+					propertiesPropertyValueMap.put(currentProperty, propertyValues);
+				}
+			}			
 			qe.close();
 		}
-		calculateUniquenessInternal(ontologyClass, subjects.size(),
-				entityCountThing, entities);
+		
+		for (Iterator iterator = propertiesPropertyValueMap.keySet().iterator(); iterator.hasNext();) {
+			String propertyUri = (String) iterator.next();
+			HashMap<Key, Integer> propertyValues = propertiesPropertyValueMap.get(propertyUri);
+
+			Statistics stats = new Statistics();
+			if (this.all) {
+				stats.getUniquenessDensityKeyness("http://www.w3.org/2002/07/owl#Thing",
+						propertyUri, propertyValues, entityCountThing, this.out);
+			} else {
+				stats.getUniquenessDensityKeyness(ontologyClass.getURI(), propertyUri,
+						propertyValues, subjects.size(), this.out);
+			}
+		}
 	}
 
 	/**
@@ -515,7 +407,7 @@ public class LODUCC {
 	 * @param entityCountThing
 	 * @param entities
 	 */
-	private void calculateUniquenessInternal(OntClass ontologyClass,
+	private void outputKeynessStatistics(OntClass ontologyClass,
 			int entityCount, int entityCountThing,
 			HashMap<String, HashMap<String, List<String>>> entities) {
 		HashMap<String, List<List<String>>> propertyValueMap = new HashMap<String, List<List<String>>>();
@@ -525,10 +417,8 @@ public class LODUCC {
 		while (it.hasNext()) {
 			Entry<String, HashMap<String, List<String>>> pairs = it.next();
 			pairs.getKey();
-			HashMap<String, List<String>> predicates = pairs
-					.getValue();
-			Iterator<Entry<String, List<String>>> predIt = predicates
-					.entrySet().iterator();
+			HashMap<String, List<String>> predicates = pairs.getValue();
+			Iterator<Entry<String, List<String>>> predIt = predicates.entrySet().iterator();
 			while (predIt.hasNext()) {
 				Entry<String, List<String>> predPairs = predIt.next();
 				String predicate = predPairs.getKey();
@@ -556,11 +446,7 @@ public class LODUCC {
 			for (Iterator<List<String>> iterator = objectLists.iterator(); iterator.hasNext();) {
 				List<String> objects = iterator.next();
 				Key keys = new Key(objects);
-				if (!propertyValues.containsKey(keys)) {
-					propertyValues.put(keys, 1);
-				} else {
-					propertyValues.put(keys, propertyValues.get(keys) + 1);
-				}
+				addPropertyValueCount(propertyValues, keys);
 			}
 			Statistics stats = new Statistics();
 			if (this.all) {
@@ -573,6 +459,207 @@ public class LODUCC {
 		}
 	}
 	
+	private HashMap<Key, Integer> addPropertyValueCount(HashMap<Key, Integer> propertyValues, Key key) {
+		if (!propertyValues.containsKey(key)) {
+			propertyValues.put(key, 1);
+		} else {
+			propertyValues.put(key, propertyValues.get(key) + 1);
+		}
+		return propertyValues;
+	}
+
+	/**
+	 * @param ontologyClass
+	 * @return
+	 */
+	private HashSet<String> getEntityUris(OntClass ontologyClass) {
+		String ontologyClassUri = ontologyClass.getURI();
+		HashSet<String> entityURLs = new HashSet<String>();
+		String sparql = "SELECT ?s ?t " + "WHERE { ";
+		// if DBpedia, get subclasses already from SPARQL
+		if (this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+			sparql += " ?s a <" + ontologyClassUri + ">; ";
+			sparql += " a ?t. } ";
+		} else {
+			sparql += " ?s a <" + ontologyClassUri + ">. } ";
+		}
+		// get subclasses
+		List<OntClass> subclasses = new ArrayList<OntClass>();
+		ExtendedIterator<OntClass> subclassIterator;
+		if (this.only != null) {
+			subclassIterator = ontologyClass.listSubClasses(true);
+		} else {
+			subclassIterator = ontologyClass.listSubClasses();
+		}
+		while (subclassIterator.hasNext()) {
+		  OntClass subclass = subclassIterator.next();
+		  if (!subclass.toString().startsWith(this.ontns)) continue;
+		  subclasses.add(subclass);
+		}
+		if (subclasses.size() > 0) {
+			logger.debug("  Subclasses: " + StringUtils.join(subclasses,","));
+		}
+		
+		List<String> toDelete = new ArrayList<String>();
+
+		// if the whole dataset is loaded as ontology load instances from it
+		if (this.datasetLoadedAsOnt) {
+			/*
+			ExtendedIterator it = ontologyClass.listInstances();
+			while (it.hasNext()) {
+				Individual entity = (Individual) it.next();
+				if (!entity.toString().startsWith(this.ns)) continue;
+				if (!entityURLs.contains(entity.toString()) && !toDelete.contains(entity.toString())) {
+					entityURLs.add(entity.toString());
+				}
+				if (this.only != null) {
+					// TODO handle this
+				}
+			}
+			*/
+			entityURLs = listEntities(ontologyClassUri);
+		// otherwise use SPARQL
+		} else {
+			Query qry = QueryFactory.create(sparql);
+			QueryExecution qe = QueryExecutionFactory.create(qry, this.dataset);
+			ResultSet rs = qe.execSelect();
+	
+			while (rs.hasNext()) {
+				QuerySolution sol = rs.nextSolution();
+				RDFNode subject = sol.get("s");
+				RDFNode type = sol.get("t");
+				if (!subject.toString().startsWith(this.ns)) continue;
+				if (!entityURLs.contains(subject.toString()) && !toDelete.contains(subject.toString())) {
+					entityURLs.add(subject.toString());
+				}
+				if (this.only != null) {
+					if (subclasses.contains(type.toString())) {
+						if (!toDelete.contains(subject.toString())) {
+							toDelete.add(subject.toString());
+						}
+					}
+				}
+			}
+			qe.close();
+		}
+		
+		// if -only parameter given, exclude entities of subclasses
+		if (this.only != null) {
+			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+				for (Iterator<OntClass> iterator = subclasses.iterator(); iterator.hasNext();) {
+					OntClass subclassClass = (OntClass) iterator.next();
+					String subclass = subclassClass.getURI();
+					logger.debug("Excluding entities of type " + subclass);
+					
+					if (this.datasetLoadedAsOnt) {
+						/*
+						ExtendedIterator it = subclassClass.listInstances();
+						while (it.hasNext()) {
+							Individual entity = (Individual) it.next();
+							if (!entity.getURI().startsWith(this.ns)) continue;
+							if (!toDelete.contains(entity.getURI())) {
+								toDelete.add(entity.getURI());
+							}
+						}
+						*/
+						HashSet<String> subclassIndividuals = listEntities(subclass);
+						for (Iterator iterator2 = subclassIndividuals.iterator(); iterator2.hasNext();) {
+							String individualUri = (String) iterator2.next();
+							if (!toDelete.contains(individualUri)) {
+								toDelete.add(individualUri);
+							}
+						}
+					} else {
+						String sparql_subclass = "SELECT ?s ?t " + "WHERE { "
+								+ " ?s a <" + subclass + ">. }";
+						Query qry_subclass = QueryFactory.create(sparql_subclass);
+						QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
+						ResultSet rs_subclass = qe_subclass.execSelect();
+						while (rs_subclass.hasNext()) {
+							QuerySolution sol_subclass = rs_subclass.nextSolution();
+							RDFNode subject_subclass = sol_subclass.get("s");
+							if (!subject_subclass.toString().startsWith(this.ns)) continue;
+							if (!toDelete.contains(subject_subclass.toString())) {
+								toDelete.add(subject_subclass.toString());
+							}
+		
+						}
+						qe_subclass.close();
+					}
+				}
+			}
+			
+		} else {	// add entities of subclasses (if not DBpedia and all classes given already)
+			if (entityURLs.size() > 0) {
+				logger.info("Found " + entityURLs.size() + " entities of type " + ontologyClassUri);
+			}
+			if (!this.ns.equals(DBPEDIA_RESOURCE_NS)) {
+				for (Iterator<OntClass> iterator = subclasses.iterator(); iterator.hasNext();) {
+					OntClass subclassClass = (OntClass) iterator.next();
+					String subclass = subclassClass.getURI();
+					
+					int subclassEntityCount = 0;
+
+					// if the whole dataset is loaded as ontology load instances from it
+					if (this.datasetLoadedAsOnt) {
+						ExtendedIterator it = subclassClass.listInstances();
+						while (it.hasNext()) {
+							Individual entity = (Individual) it.next();
+							if (!entity.getURI().startsWith(this.ns)) continue;
+							if (!entityURLs.contains(entity.getURI()) && !toDelete.contains(entity.getURI())) {
+								entityURLs.add(entity.getURI());
+								subclassEntityCount++;
+							}
+						}
+					//otherwise use SPARQL
+					} else {
+						String sparql_subclass = "SELECT ?s " + "WHERE { "
+								+ " ?s a <" + subclass + ">. }";
+						Query qry_subclass = QueryFactory.create(sparql_subclass);
+						QueryExecution qe_subclass = QueryExecutionFactory.create(qry_subclass, this.dataset);
+						ResultSet rs_subclass = qe_subclass.execSelect();
+						while (rs_subclass.hasNext()) {
+							QuerySolution sol_subclass = rs_subclass.nextSolution();
+							RDFNode subject_subclass = sol_subclass.get("s");
+							if (!subject_subclass.toString().startsWith(this.ns)) continue;
+							if (!entityURLs.contains(subject_subclass.toString()) && !toDelete.contains(subject_subclass.toString())) {
+								entityURLs.add(subject_subclass.toString());
+								subclassEntityCount++;
+							}
+						}
+						qe_subclass.close();
+					}
+					if (subclassEntityCount > 0) {
+						logger.debug("  Added " + subclassEntityCount + " entities of type " + subclass + " to " + ontologyClassUri);
+					}
+				}
+			}
+		}
+
+		for (Iterator<String> iterator = toDelete.iterator(); iterator.hasNext();) {
+			String delete = iterator.next();
+			entityURLs.remove(delete.toString());
+			
+		}
+		return entityURLs;
+	}
+	
+	/**
+	 * @param ontClassUri
+	 * @return
+	 */
+	private HashSet<String> listEntities(String ontClassUri) {
+		HashSet<String> subjects = new HashSet<String>();
+		ExtendedIterator individuals = this.ontology.listIndividuals();
+		while (individuals.hasNext()) {
+			Individual individual = (Individual) individuals.next();
+			if (!individual.getURI().startsWith(this.ns)) continue;
+		    if (individual.hasOntClass(ontClassUri)) {
+		    	subjects.add(individual.getURI());
+		    }
+		}
+		return subjects;
+	}
 
 	/**
 	 * @param file
