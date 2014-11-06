@@ -1,7 +1,6 @@
 package de.hpi.fgis.loducc;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
@@ -11,8 +10,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map.Entry;
-
 import org.apache.commons.lang3.StringUtils;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
@@ -22,7 +19,6 @@ import com.hp.hpl.jena.ontology.Individual;
 import com.hp.hpl.jena.ontology.OntModel;
 import com.hp.hpl.jena.ontology.OntModelSpec;
 import com.hp.hpl.jena.ontology.OntClass;
-import com.hp.hpl.jena.ontology.OntResource;
 import com.hp.hpl.jena.query.Dataset;
 import com.hp.hpl.jena.query.Query;
 import com.hp.hpl.jena.query.QueryExecution;
@@ -32,23 +28,15 @@ import com.hp.hpl.jena.query.QuerySolution;
 import com.hp.hpl.jena.query.ResultSet;
 import com.hp.hpl.jena.rdf.model.Model;
 import com.hp.hpl.jena.rdf.model.ModelFactory;
-import com.hp.hpl.jena.rdf.model.Property;
 import com.hp.hpl.jena.rdf.model.RDFNode;
-import com.hp.hpl.jena.rdf.model.ResIterator;
 import com.hp.hpl.jena.rdf.model.Resource;
-import com.hp.hpl.jena.rdf.model.ResourceFactory;
-import com.hp.hpl.jena.rdf.model.Statement;
-import com.hp.hpl.jena.rdf.model.StmtIterator;
-import com.hp.hpl.jena.sdb.assembler.MissingException;
 import com.hp.hpl.jena.tdb.TDBFactory;
 import com.hp.hpl.jena.util.FileManager;
 import com.hp.hpl.jena.util.iterator.ExtendedIterator;
-import com.sun.org.apache.xpath.internal.functions.WrongNumberArgsException;
-
-import de.hpi.fgis.loducc.statistics.Keyness;
 import de.hpi.fgis.loducc.statistics.Statistics;
 
 public class LODUCC {
+	private static final String OWL_THING = "http://www.w3.org/2002/07/owl#Thing";
 	private static final String DBPEDIA_ONTOLOGY_NS = "http://dbpedia.org/ontology/";
 	private static final String DBPEDIA_RESOURCE_NS = "http://dbpedia.org/resource/";
 	private Model dataset = ModelFactory.createDefaultModel();
@@ -121,12 +109,15 @@ public class LODUCC {
 				if (this.tdb) {
 					loadTdb(files[i], loadedDatasets);
 				} else if (this.jena) {
-					loadDump(files[i]);
+					Model model = loadDump(files[i]);
+					this.dataset.add(model);
 				}
 	            logger.info("Dataset loaded: " + files[i]);
 				loadedDatasets++;
 			}
 		}
+		
+		// TODO onlyProperty
 		
 		if (loadedDatasets == 0) {
 			throw new IllegalArgumentException("Provide at least one dataset to load.");
@@ -239,10 +230,10 @@ public class LODUCC {
 	 * 
 	 */
 	private void profileKeynessForAllEntities() {
-		int entityCountThing = 0;
+		HashSet<String> subjects = new HashSet<String>();
 		String sparql_s = "SELECT DISTINCT ?s " + "WHERE { ";
 		if (this.ns.equals(DBPEDIA_RESOURCE_NS)) {
-			sparql_s += "?s a <http://www.w3.org/2002/07/owl#Thing>. } ";
+			sparql_s += "?s a <" + OWL_THING + ">. } ";
 		} else {
 			sparql_s += "?s a ?t. } ";
 		}
@@ -254,81 +245,19 @@ public class LODUCC {
 			RDFNode subject = sol.get("s");
 			String subjectUri = subject.toString();
 			if (!subjectUri.startsWith(this.ns)) continue;
-			if (subjectUri.startsWith(this.ontns)) continue;
-			entityCountThing++;
+			// TODO not needed? if (subjectUri.startsWith(this.ontns)) continue;
+			subjects.add(subjectUri);
 		}
 		qe_s.close();
-		logger.info("Found "+entityCountThing+" entities of type owl:Thing");
-		
-		String sparql = "SELECT DISTINCT ?p " + "WHERE { "
-				+ "?s ?p ?o. } ";
-		Query qry = QueryFactory.create(sparql);
-		QueryExecution qe = QueryExecutionFactory.create(qry, dataset);
-		ResultSet rs = qe.execSelect();
-		while (rs.hasNext()) {
-			QuerySolution sol = rs.nextSolution();
-			RDFNode property = sol.get("p");
-			profileKeynessPerProperty(entityCountThing, property);
-		}
-		qe.close();
+		logger.info("Found " + subjects.size() + " entities of type owl:Thing");
+		outputKeynessStatistics(this.ontology.getOntClass(OWL_THING), subjects);
 	}
-
-	/**
-	 * TODO refactor
-	 * 
-	 * @param entityCountThing
-	 * @param property
-	 */
-	private void profileKeynessPerProperty(int entityCountThing,
-			RDFNode property) {
-		HashMap<String, HashMap<String, List<String>>> entities = new HashMap<String, HashMap<String, List<String>>>();
-		
-		Property currentProperty = property.as(Property.class);
-		ResIterator subjects = dataset.listResourcesWithProperty(currentProperty);
-		while (subjects.hasNext()) {
-			Resource subject = (Resource) subjects.next();
-			if (!subject.toString().startsWith(ns)) continue;
-			
-			StmtIterator statements = subject.listProperties(currentProperty);
-			while (statements.hasNext()) {
-				Statement statement = statements.next();
-				RDFNode object = statement.getObject();
-				String objectName = "";
-				if (object.isLiteral()) {
-					objectName= object.toString();
-				} else if (object.isURIResource()) {
-					objectName = object.asResource().getURI().toString();
-				}
-				
-				if (!entities.containsKey(subject.toString())) {
-					HashMap<String, List<String>> predicates = new HashMap<String, List<String>>();
-					List<String> objects = new ArrayList<String>();
-					objects.add(objectName);
-					predicates.put(property.toString(), objects);
-					entities.put(subject.toString(), predicates);
-				} else {
-					HashMap<String, List<String>> predicates = entities.get(subject.toString());
-					List<String> objects = new ArrayList<String>();
-					if (predicates.containsKey(property.toString())) {
-						objects = predicates.get(property.toString());
-					}
-					objects.add(objectName);
-					predicates.put(property.toString(), objects);
-					entities.put(subject.toString(), predicates);
-				}
-			}
-		}
-		
-		outputKeynessStatistics(null, entityCountThing, entityCountThing, entities);
-	}
-	
 
 	/**
 	 * @param ontologyClass
 	 * @param subjects
 	 */
 	private void outputKeynessStatistics(OntClass ontologyClass, HashSet<String> subjects) {
-		int entityCountThing = 0;
 		HashMap<String, HashMap<Key, Integer>> propertiesPropertyValueMap = new HashMap<String, HashMap<Key, Integer>>();
 		for (Iterator<String> iterator = subjects.iterator(); iterator.hasNext();) {
 			String subject = iterator.next();
@@ -392,8 +321,8 @@ public class LODUCC {
 
 			Statistics stats = new Statistics();
 			if (this.all) {
-				stats.getUniquenessDensityKeyness("http://www.w3.org/2002/07/owl#Thing",
-						propertyUri, propertyValues, entityCountThing, this.out);
+				stats.getUniquenessDensityKeyness(OWL_THING,
+						propertyUri, propertyValues, subjects.size(), this.out);
 			} else {
 				stats.getUniquenessDensityKeyness(ontologyClass.getURI(), propertyUri,
 						propertyValues, subjects.size(), this.out);
@@ -401,64 +330,6 @@ public class LODUCC {
 		}
 	}
 
-	/**
-	 * @param ontologyClass
-	 * @param entityCount
-	 * @param entityCountThing
-	 * @param entities
-	 */
-	private void outputKeynessStatistics(OntClass ontologyClass,
-			int entityCount, int entityCountThing,
-			HashMap<String, HashMap<String, List<String>>> entities) {
-		HashMap<String, List<List<String>>> propertyValueMap = new HashMap<String, List<List<String>>>();
-
-		Iterator<Entry<String, HashMap<String, List<String>>>> it = entities
-				.entrySet().iterator();
-		while (it.hasNext()) {
-			Entry<String, HashMap<String, List<String>>> pairs = it.next();
-			pairs.getKey();
-			HashMap<String, List<String>> predicates = pairs.getValue();
-			Iterator<Entry<String, List<String>>> predIt = predicates.entrySet().iterator();
-			while (predIt.hasNext()) {
-				Entry<String, List<String>> predPairs = predIt.next();
-				String predicate = predPairs.getKey();
-				List<String> objects = predPairs.getValue();
-				if (!objects.isEmpty()) {
-					List<List<String>> objectLists = new ArrayList<List<String>>();
-					if (propertyValueMap.containsKey(predicate)) {
-						objectLists = propertyValueMap.get(predicate);
-					}
-					objectLists.add(objects);
-					propertyValueMap.put(predicate, objectLists);
-				}
-			}
-		}
-
-		Iterator<Entry<String, List<List<String>>>> propertyIt = propertyValueMap
-				.entrySet().iterator();
-		while (propertyIt.hasNext()) {
-			Entry<String, List<List<String>>> pairs = propertyIt.next();
-			String property = pairs.getKey();
-			List<List<String>> objectLists = pairs
-					.getValue();
-
-			HashMap<Key, Integer> propertyValues = new HashMap<Key, Integer>();
-			for (Iterator<List<String>> iterator = objectLists.iterator(); iterator.hasNext();) {
-				List<String> objects = iterator.next();
-				Key keys = new Key(objects);
-				addPropertyValueCount(propertyValues, keys);
-			}
-			Statistics stats = new Statistics();
-			if (this.all) {
-				stats.getUniquenessDensityKeyness("http://www.w3.org/2002/07/owl#Thing",
-						property, propertyValues, entityCountThing, this.out);
-			} else {
-				stats.getUniquenessDensityKeyness(ontologyClass.getURI(), property,
-						propertyValues, entityCount, this.out);
-			}
-		}
-	}
-	
 	private HashMap<Key, Integer> addPropertyValueCount(HashMap<Key, Integer> propertyValues, Key key) {
 		if (!propertyValues.containsKey(key)) {
 			propertyValues.put(key, 1);
@@ -665,15 +536,9 @@ public class LODUCC {
 	 * @param file
 	 * @throws Exception
 	 */
-	private void loadDump(String file) throws Exception {
-		try {
-			Model dataset1 = FileManager.get().loadModel(file);
-			this.dataset.add(dataset1);
-		} catch (Exception e) {
-			logger.error("Error loading file: "+file);
-			e.printStackTrace(System.out);
-			System.exit(0);
-		}
+	public static Model loadDump(String file) throws Exception {
+		Model dataset = FileManager.get().loadModel(file);
+		return dataset;
 	}
 
 	/**
@@ -717,7 +582,7 @@ public class LODUCC {
 
 	public static void main(String[] args) {
 		try {
-			new LODUCC(args, "jena");
+			new LODUCC(args, JENA);
 		} catch (IllegalArgumentException e) {
 			e.printStackTrace();
 		} catch (IllegalStateException e) {

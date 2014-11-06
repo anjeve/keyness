@@ -15,15 +15,13 @@ import com.hp.hpl.jena.query.QuerySolution;
 import com.hp.hpl.jena.query.ResultSet;
 import com.hp.hpl.jena.rdf.model.RDFNode;
 
-import de.hpi.fgis.loducc.LODUCC;
-
 public class Dataset {
-	private static final Logger logger = Logger.getLogger(LODUCC.class);
+	private static final Logger logger = Logger.getLogger(Dataset.class);
 	
 	/**
 	 * 
 	 */
-	private void getClasses(OntModel ontology) {
+	public static void getClasses(OntModel ontology) {
         for (Iterator<OntClass> i = ontology.listHierarchyRootClasses(); i.hasNext(); ) {
             OntClass hierarchyRoot = i.next();
             logger.debug(hierarchyRoot);
@@ -31,9 +29,7 @@ public class Dataset {
                 OntClass hierarchysubClass = j.next();
                 logger.debug("  " + hierarchysubClass);
             }
-            
         }
-	
 	}
 	
 	/**

@@ -21,10 +21,12 @@ public class Keyness {
 		for (Iterator<String[]> iterator = csv.iterator(); iterator.hasNext();) {
 			String[] strings = (String[]) iterator.next();
 			double[] data = new double[2];
-			for (int i = 0; i < strings.length; i++) {
-				if (i > 2) {
+			int values = 0;
+			for (int i = strings.length-1; i > 0 ; i--) {
+				if (values < 2) {
 					try {
-						data[i-3] = Double.parseDouble(strings[i]);
+						data[values] = Double.parseDouble(strings[i]);
+						values++;
 					} catch(ArrayIndexOutOfBoundsException e) {
 						System.out.println(strings[0]+ strings[2]);
 						e.printStackTrace();
