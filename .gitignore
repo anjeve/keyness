@@ -1,1 +1,16 @@
-# Created by .ignore support plugin (hsz.mobi)
+/bin
+/target
+/*.owl
+/*.nt
+/*.n3
+/*.csv
+
+.classpath
+.project
+.settings/
+
+# MacOS
+.DS_Store
+
+# Eclipse
+/*.launch

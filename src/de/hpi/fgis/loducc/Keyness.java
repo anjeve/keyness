@@ -1,61 +1,97 @@
 package de.hpi.fgis.loducc;
 
-import java.io.FileNotFoundException;
-import java.io.PrintWriter;
-import java.util.Iterator;
-import java.util.List;
+import de.hpi.fgis.loducc.statistics.IntegerStatistics;
+
+import java.util.*;
+
+/*
+    Keyness for ProLOD
+ */
 
 public class Keyness {
 
-	public Keyness(String[] args) throws Exception {
-		for (int i = 0; i < args.length; i++) {
-			List<String[]> csv = CsvReader.readCsv(args[i]);
-			getKeyness(csv);
-		}
-	}
-	
-	private void getKeyness(List<String[]> csv) throws FileNotFoundException {
-		PrintWriter out = new PrintWriter("keyness.csv");
-		for (Iterator<String[]> iterator = csv.iterator(); iterator.hasNext();) {
-			String[] strings = (String[]) iterator.next();
-			double[] data = new double[2];
-			for (int i = 0; i < strings.length; i++) {
-				if (i > 2) {
-					try {
-						data[i-3] = Double.parseDouble(strings[i]);
-					} catch(ArrayIndexOutOfBoundsException e) {
-						System.out.println(strings[0]+ strings[2]);
-						e.printStackTrace();
-						System.exit(0);
-					} finally {
-						
-					}
-				}
-				out.print(strings[i] + ",");
-			}
-			out.println(harmonicMean(data));
-		}
-		out.close();
-	}
+    public Keyness() {
 
-	public static double getKeyness(double uniqueness, double density) {
-		double[] data = new double[2];
-		data[0] = uniqueness;
-		data[1] = density;
-		return harmonicMean(data);
-	}
-
-	public static double harmonicMean(double[] data) {
-        double sum = 0.0;
- 
-        for (int i = 0; i < data.length; i++) {
-            sum += 1.0 / data[i];
-        }
- 
-        return data.length / sum;
     }
 
-	public static void main(String[] args) throws Exception {
-		new Keyness(args);
-	}
+    public HashMap<Integer, HashMap<String, Double>> getKeyness(String ontologyClass, HashMap<Integer, HashMap<Integer, Integer>> triples) {
+        HashMap<Integer, HashMap<String, Double>> results = new HashMap<Integer, HashMap<String, Double>>();
+        HashMap<Integer, HashMap<IntegerKey, Integer>> propertiesPropertyValueMap = new HashMap<Integer, HashMap<IntegerKey, Integer>>();
+
+        Iterator it = triples.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry pair = (Map.Entry) it.next();
+            Integer subject = (Integer) pair.getKey();
+
+            boolean firstProperty = true;
+            Integer currentProperty = null;
+            List<Integer> currentPropertyValues = new ArrayList<Integer>();
+
+            HashMap<Integer, Integer> subjectTriples = (HashMap<Integer, Integer>) pair.getValue();
+            Iterator tripleIt = subjectTriples.entrySet().iterator();
+            while (tripleIt.hasNext()) {
+                Map.Entry triple = (Map.Entry) tripleIt.next();
+                Integer property = (Integer) triple.getKey();
+                Integer object = (Integer) triple.getValue();
+
+                if (currentProperty != property) {
+                    if (firstProperty) {
+                        firstProperty = false;
+                    } else {
+                        IntegerKey keys = new IntegerKey(currentPropertyValues);
+                        if (propertiesPropertyValueMap.containsKey(currentProperty)) {
+                            HashMap<IntegerKey, Integer> existingPropertyValues = propertiesPropertyValueMap.get(currentProperty);
+                            existingPropertyValues = addPropertyValueCount(existingPropertyValues, keys);
+                            propertiesPropertyValueMap.put(currentProperty, existingPropertyValues);
+                        } else {
+                            HashMap<IntegerKey, Integer> propertyValues = new HashMap<IntegerKey, Integer>();
+                            propertyValues = addPropertyValueCount(propertyValues, keys);
+                            propertiesPropertyValueMap.put(currentProperty, propertyValues);
+                        }
+                    }
+                    currentProperty = property;
+                    currentPropertyValues = new ArrayList<Integer>();
+                }
+                currentPropertyValues.add(object);
+            }
+            // add last property
+            if (currentPropertyValues.size() > 0) {
+                IntegerKey keys = new IntegerKey(currentPropertyValues);
+                if (propertiesPropertyValueMap.containsKey(currentProperty)) {
+                    HashMap<IntegerKey, Integer> existingPropertyValues = propertiesPropertyValueMap.get(currentProperty);
+                    existingPropertyValues = addPropertyValueCount(existingPropertyValues, keys);
+                    propertiesPropertyValueMap.put(currentProperty, existingPropertyValues);
+                } else {
+                    HashMap<IntegerKey, Integer> propertyValues = new HashMap<IntegerKey, Integer>();
+                    propertyValues = addPropertyValueCount(propertyValues, keys);
+                    propertiesPropertyValueMap.put(currentProperty, propertyValues);
+                }
+            }
+        }
+
+        for (Iterator iterator = propertiesPropertyValueMap.keySet().iterator(); iterator.hasNext();) {
+            Integer property = (Integer) iterator.next();
+            HashMap<IntegerKey, Integer> propertyValues = propertiesPropertyValueMap.get(property);
+
+            IntegerStatistics stats = new IntegerStatistics();
+            results.put(property, stats.getUniquenessDensityKeyness(property, propertyValues, triples.size()));
+        }
+
+        return results;
+    }
+
+    private HashMap<IntegerKey, Integer> addPropertyValueCount(HashMap<IntegerKey, Integer> propertyValues, IntegerKey key) {
+        if (!propertyValues.containsKey(key)) {
+            propertyValues.put(key, 1);
+        } else {
+            propertyValues.put(key, propertyValues.get(key) + 1);
+        }
+        return propertyValues;
+    }
+
+
+    public static void main(String[] args) {
+        new Keyness();
+    }
+
 }
