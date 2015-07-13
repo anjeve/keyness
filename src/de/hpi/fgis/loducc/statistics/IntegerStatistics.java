@@ -40,6 +40,7 @@ public class IntegerStatistics {
 			result.put("uniqueness", uniqueness);
 			result.put("density", density);
 			result.put("keyness", Keyness.getKeyness(uniqueness, density));
+			result.put("properties", (double) propertyValues.size());
 	    }
 		return result;
 	}
